@@ -1,0 +1,10 @@
+# MATLAB project internals
+resources/
+*.prj
+
+# MATLAB autosave files
+*.asv
+
+# Large binary outputs (regenerate by running scripts)
+Output/*.mat
+Input/CAN_MD.csv

@@ -1,0 +1,10 @@
+ dfactest.m -- determine the number of dynamic factors in Bai-Ng.
+supplementary programs: 
+pc.m  -- principal component estimates of F using the L'L/N=I_r
+normalization
+est_e.m estimate a VAR in Fhat
+
+It would be obvious what other functions are. I got them mostly from
+ www.spatialeconometrics.com.
+The ones I know I use, I put them in
+www.umich.edu/~ngse/papers/matlab_stuff.zip
