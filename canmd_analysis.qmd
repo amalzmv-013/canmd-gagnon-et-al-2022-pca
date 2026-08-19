@@ -1,0 +1,191 @@
+---
+title: "PCA Analysis of the CAN-MD Macroeconomic Database"
+subtitle: "A Partial Replication of Fortin-Gagnon, Leroux, Stevanovic, and Surprenant (2022)"
+author: "Amal Varghese"
+affiliation: "Department of Economics, Yonsei University"
+date: today
+format:
+  pdf:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    geometry: margin=2.5cm
+    fontsize: 11pt
+    linestretch: 1.3
+    colorlinks: true
+    cite-method: biblatex
+bibliography: references.bib
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+library(knitr)
+library(tidyverse)
+```
+
+# Introduction
+
+This document presents a partial replication of @fortingagnon2022, who introduce the CAN-MD database — a large monthly macroeconomic dataset for Canada covering 1981M01 to 2019M12. The original paper spans five sections: database construction, factor analysis, recession prediction, economic forecasting, and measuring heterogeneous effects of monetary policy. This replication focuses exclusively on the **factor analysis component** (Section 2 of the paper), specifically the extraction of latent common factors from the aggregate Canadian panel and the associated diagnostics.
+
+The primary objective is pedagogical: to implement principal component analysis (PCA) on a large macroeconomic panel in MATLAB, replicate key figures and tables from the paper, and develop familiarity with the CAN-MD data structure and factor selection methodology. The recession prediction exercise (Section 3 of the paper, Figures 6, 7, and Table 2) is deferred — the paper's implementation involves BIC-optimal factor combination search across $2^K - 1$\$2\^K - 1\$ combinations of $K$ factors, EM-algorithm factor extraction, and custom pseudo-$R^2$ computation for lasso logit models, which represent a substantially more complex undertaking.
+
+All code is written in MATLAB and is available at [github.com/amalzmv-013/canmd-gagnon-et-al-2022-pca](https://github.com/amalzmv-013/canmd-gagnon-et-al-2022-pca).
+
+# Data
+
+## The CAN-MD Database
+
+The CAN-MD database [@fortingagnon2022] is a monthly macroeconomic panel for Canada, modelled after the FRED-MD database of @mccracken2016 for the United States. The database covers 387 series across the following categories: real output and income, labour market, housing, manufacturing, money and credit, interest rates and spreads, exchange rates and trade, prices, and stock market indices. Series are available at both the national and provincial levels.
+
+Two data files from the replication package are used in this analysis:
+
+**`TR_CAN_MD.csv`** (March 2020 vintage): The stationarity-transformed raw panel. Each series has been transformed to achieve approximate stationarity — typically via log-differencing for quantity variables and first-differencing for rates. This file is used in scripts `a_` and `b_`.
+
+**`balanced_can_md.csv`** (January 2020 vintage): The EM-algorithm balanced panel, covering 1981M01–2019M12 with no missing values. Missing observations are filled by the expectation-maximisation (EM) algorithm of @stockwatson2002. This file is used in script `c_` for factor selection criteria, which require a complete matrix.
+
+## Variable Selection
+
+The full panel contains 387 series, of which 271 carry provincial-level suffixes (`_NF`, `_PEI`, `_NS`, `_NB`, `_QC`, `_ONT`, `_MAN`, `_SAS`, `_ALB`, `_BC`). Following @fortingagnon2022, the analysis retains only the **115 aggregate national series** for the Canadian panel. This filtering is implemented via regex pattern matching on variable names.
+
+## Sample Period
+
+A deliberate deviation from the paper concerns the estimation window:
+
+- **Scripts `a_` and `b_`** use **1992M01–2019M12** (336 months). The 1992M01 start reflects the post inflation-targeting adoption period — the Bank of Canada formally adopted inflation targeting in February 1991, making 1992M01 the conventional clean start date in Canadian monetary policy empirics. This is a shorter window than the paper's 1981M01 start.
+- **Script `c_`** uses the full **1981M01–2019M12** sample (468 months) from the balanced panel — consistent with the paper's factor selection exercise, which requires observations covering all three C.D. Howe recession episodes.
+
+# Methodology
+
+## Principal Component Analysis
+
+Let $X_t$ be a $T \times N$ matrix of standardised macroeconomic series (zero mean, unit variance), where $T$ denotes the number of time periods and $N$ the number of series. The static factor model postulates that:
+
+$$X_t = \Lambda F_t + e_t$$
+
+where $F_t$ is a $K \times 1$ vector of latent common factors, $\Lambda$ is an $N \times K$ matrix of factor loadings, and $e_t$ is an $N \times 1$ vector of idiosyncratic disturbances.
+
+PCA extracts $\hat{F}_t$ as the eigenvectors of the $N \times N$ correlation matrix of $X_t$, corresponding to the $K$ largest eigenvalues. The $k$-th eigenvalue $\lambda_k$ measures the raw variance explained by the $k$-th component, and the proportion of variance explained is $\lambda_k / \sum_{j=1}^N \lambda_j$.
+
+## Factor Selection Criteria
+
+To determine the appropriate number of factors $K$, the paper applies seven formal selection criteria to the EM-balanced panel over the full 1981M01–2019M12 sample:
+
+| Criterion | Reference | Type |
+|----|----|----|
+| BN02 | @baingg2002 | Information criterion (log penalty, IC$_{p2}$) |
+| ABC | @alessi2010 | BN02 variant with stability tuning |
+| ON | @onatski2010 | Eigenvalue gap test |
+| AH | @ahnhorenstein2013 | Eigenvalue ratio test |
+| HL | @hallinliska2007 | Subsampling stability criterion |
+| BN07 | @baingg2007 | Dynamic factor information criterion |
+| AW | @amengualwatson2007 | Dynamic factor test |
+
+All seven criteria are implemented via the authors' `EstimationNumberFactors` MATLAB toolbox, accessed through the `select_numfac()` function. For the recursive factor selection exercise (Figure 3), the expanding window applies the BN02 (`nbplog`) and HL (`HLestimate`) criteria at each time step.
+
+**Implementation note:** A non-trivial ordering dependency exists between `HLestimate` and `nbplog` within the recursive loop. `HLestimate` internally calls `rand('state', 0)`, switching MATLAB to a legacy random number generator. If `nbplog` is called immediately after in the same iteration, the legacy RNG state corrupts the minimum-finding step inside `minindc()`, causing `nbplog` to return zero factors. The fix is to call `HLestimate` first within each iteration, followed by `nbplog` — ensuring the legacy RNG is reseeded to a consistent state before BN02 runs.
+
+# Results
+
+## Factor Structure — Figure 2
+
+```{r}
+#| echo: false
+#| fig-cap: "Eigenvalues and cumulative variance explained by the first 20 principal components. Left panel: scree plot showing the declining eigenvalue sequence. Right panel: trace (cumulative proportion of variance explained). Sample: 1992M01–2019M12, 114 aggregate series."
+#| out-width: "100%"
+knitr::include_graphics("Output/Figure2_scree.pdf")
+```
+
+Figure 2 presents the scree plot and cumulative variance trace for the first 20 principal components. The first component explains approximately 9.9% of the total variance, with the cumulative share reaching 45.7% at the tenth component. The scree plot shows a characteristic pattern for macroeconomic panels: a steep initial decline flattening gradually, with no sharp elbow — reflecting the diffuse co-movement structure typical of large macro panels as noted by @fortingagnon2022.
+
+The cumulative variance figures are modestly lower than the paper's reported values (which reach approximately 50% at the tenth component). This reflects the shorter 1992-start window, which excludes the high-variance early 1980s period characterised by the dual recessions of 1981–82, the Volcker disinflation shock, and the subsequent recovery. These structural events generate strong co-movement across macro series that the 1992-start window does not capture.
+
+## Factor Time Series — Figure 4
+
+```{r}
+#| echo: false
+#| fig-cap: "Factor scores (black, left axis) and highest-loading series (red, right axis) for the first four principal components. Both series scaled by their respective standard deviations. Grey shading: 2008M10–2009M05 recession (C.D. Howe). Sample: 1992M01–2019M12."
+#| out-width: "100%"
+knitr::include_graphics("Output/Figure4_factors.pdf")
+```
+
+Figure 4 plots the time series of the first four factor scores alongside the series with the highest absolute loading on each factor. The highest-loading series are identified as follows:
+
+| Factor | Highest-loading series | Economic interpretation                |
+|--------|------------------------|----------------------------------------|
+| F1     | `GDP_new`              | Real activity                          |
+| F2     | `USDCAD_new`           | External sector / exchange rate        |
+| F3     | `PC_PAPER_3M`          | Monetary conditions (short-term rates) |
+| F4     | `G_AVG_5_10_Bank_rate` | Financial conditions (bond spread)     |
+
+The co-movement between the factor score and its highest-loading series is visually apparent for F1 and F4, confirming that GDP growth and the long-term bond spread are strong representatives of their respective factors. F2 and F3 show less tight co-movement, consistent with their lower individual variance shares — the second and third factors represent more diffuse phenomena with no single dominant series.
+
+Minor differences from the paper's factor labelling arise from two sources: the exclusion of `FIN_new` (which loads strongly on the paper's second factor) and the shorter estimation window, which modifies the correlation structure underlying PCA.
+
+## Factor Selection — Table 1
+
+Table 1 reports the number of factors selected by each of the seven criteria on the aggregate Canadian panel (115 series, 1981M01–2019M12).
+
+```{r}
+#| echo: false
+#| tbl-cap: "Number of factors estimated by seven selection criteria, Canada panel. Full sample: 1981M01–2019M12, 115 aggregate series."
+
+table1 <- data.frame(
+  Criterion = c("BN02 (Bai-Ng 2002)", "ABC (Alessi et al. 2010)",
+                "ON (Onatski 2010)", "AH (Ahn-Horenstein 2013)",
+                "HL (Hallin-Liska 2007)", "BN07 (Bai-Ng 2007)",
+                "AW (Amengual-Watson 2007)"),
+  Type = c("Information criterion", "BN02 variant",
+           "Eigenvalue gap", "Eigenvalue ratio",
+           "Subsampling stability", "Dynamic factor IC",
+           "Dynamic factor test"),
+  Paper = c(6, 6, 0, 2, 4, 3, 4),
+  Replication = c(6, 6, 0, 2, 4, 3, 4)
+)
+
+knitr::kable(table1, 
+             col.names = c("Criterion", "Type", "Paper", "This replication"),
+             align = c("l", "l", "c", "c"),
+             booktabs = TRUE)
+```
+
+All seven estimates match the paper exactly. The criteria broadly converge on 4–6 factors as the appropriate dimension for the Canadian aggregate panel. The ON criterion selecting zero factors reflects Onatski's (2010) conservative approach — his eigenvalue gap test requires a more pronounced gap in the scree plot than is present in this panel. The HL and AW estimates of 4 factors align with the paper's preferred choice of $K = 4$ for the impulse response analysis in Section 5.
+
+## Recursive Factor Selection — Figure 3
+
+```{r}
+#| echo: false
+#| fig-cap: "Number of factors selected recursively since 1991M01 by Bai-Ng (2002) IC$_{p2}$ criterion (solid black) and Hallin-Liska (2007) subsampling criterion (blue dashed). Expanding window estimation. Sample: balanced panel 1981M01–2019M12."
+#| out-width: "100%"
+knitr::include_graphics("Output/Figure3_recursive.pdf")
+```
+
+Figure 3 shows how each criterion's factor count estimate evolves as the sample expands from 1991M01 to 2019M12. The BN02 criterion (solid black) exhibits a stable step function: it selects 4 factors from the start of the recursive window, rising to 5 after the 2008–09 recession and to 6 near the end of the sample. This stability is a hallmark of information criteria — once the sample is large enough to identify a factor, the estimate rarely reverses.
+
+The HL criterion (blue dashed) is considerably more volatile, fluctuating between 2 and 4 factors throughout the sample. This reflects the subsampling design of the HL criterion: at each step, it checks whether the factor count estimate is stable across random subsamples of the series. With a relatively small number of series (115) and rare recession events, the stability threshold is sensitive to which subsamples are drawn, producing the observed variability.
+
+The general upward trend in both criteria — particularly visible after 2008 — is consistent with the paper's interpretation that additional common factors become statistically detectable as the sample size grows and the panel accumulates more cross-series variation.
+
+# Deviations from the Paper
+
+Table 3 summarises the key methodological deviations from @fortingagnon2022:
+
+| Aspect | Paper | This replication | Motivation |
+|------------------|------------------|------------------|------------------|
+| Sample start (a\_, b\_) | 1981M01 | 1992M01 | Post inflation-targeting regime |
+| Factor extraction | EM algorithm | Standard PCA | Pedagogical simplicity |
+| `FIN_new` in a\_, b\_ | Retained | Dropped | Coverage gap at 1992 start |
+| Recession prediction | Full pipeline | Deferred | BIC search + lasso pseudo-$R^2$ complexity |
+| Figure 4 implementation | R | MATLAB | Independent implementation |
+
+# Conclusion
+
+This exercise successfully replicates the core factor analysis results of @fortingagnon2022 for the aggregate Canadian panel. Table 1 achieves a perfect 7/7 match with the paper's reported factor counts. Figures 2, 3, and 4 are directionally consistent with the paper's findings, with minor quantitative differences attributable to the shorter 1992-start estimation window and the use of standard PCA rather than the EM algorithm.
+
+The exercise also surfaces a non-trivial methodological point: the ordering of `HLestimate` and `nbplog` within the recursive estimation loop is consequential due to the legacy random number generator state set by `HLestimate`. This type of implementation detail — invisible in the paper but critical to replication — underscores the importance of access to original replication code when attempting to reproduce econometric results.
+
+# References
+
+::: {#refs}
+:::
